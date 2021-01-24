@@ -40,8 +40,8 @@ class SelfOrganizingMap:
     """
 
     def __init__(self, m, n, dim, max_epochs=100, initial_radius=None, batch_size=128, initial_learning_rate=0.1,
-                 graph=None, std_coeff=0.5, model_name='Self-Organizing-Map', softmax_activity=False, gpus=0,
-                 output_sensitivity=-1.0, session=None, checkpoint_dir=None, restore_path=None):
+                 graph=None, std_coeff=0.5, model_name='Self-Organizing-Map', softmax_activity=False, gpus=1,
+                 output_sensitivity=-1.0):
         """
         Initialize a self-organizing map on the tensorflow graph
         :param m: Number of rows of neurons
@@ -283,15 +283,4 @@ class SelfOrganizingMap:
         # With multi-gpu training we collect the results and do the weight assignment on the CPU
         return numerator, denominator
 
-
-    def train_batch(self, batch, epoch):
-
-        self._sess.run(self._training_op, feed_dict={
-                        self._input: batch
-                        self._epoch: epoch})
-
-    @property
-    def output_weights(self):
-        """ :return: The weights of the trained SOM as a NumPy array, or `None` if the SOM hasn't been trained """
-        return np.array(self._sess.run(self._weights))
 
