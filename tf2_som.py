@@ -96,9 +96,7 @@ class SelfOrganizingMap(tf.keras.layers.Layer):
         self._activity_merged = None
         # This will be the collection of summaries for this subgraph. Add new summaries to it and pass it to merge()
         self._initial_learning_rate = initial_learning_rate
-        initializer = tf.keras.initializers.RandomUniform(minval=0., maxval=1.)
-        initial_value = initializer(shape=(self._m * self._n, self._dim))
-        self._weights = tf.Variable(initial_value=initial_value, name='weights')
+        #tf.Variable(initial_value=initial_value, name='weights')
         # Matrix of size [m*n, 2] for SOM grid locations of neurons.
         # Maps an index to an (x,y) coordinate of a neuron in the map for calculating the neighborhood distance
         self._location_vects = tf.constant(np.array(
@@ -110,7 +108,7 @@ class SelfOrganizingMap(tf.keras.layers.Layer):
             for j in range(self._n):
                 yield np.array([i, j])
 
-    def call(self, input_vect, training=False, epoch=None):
+    def call(self, inputs, training=False, epoch=None):
                 
         # Randomly initialized weights for all neurons, stored together
         # as a matrix Variable of shape [num_neurons, input_dims]
@@ -127,8 +125,9 @@ class SelfOrganizingMap(tf.keras.layers.Layer):
         # corresponding to the distance between a particular input and each neuron in the map
         # Also note we are getting the squared distance because there's no point calling sqrt or tf.norm
         # if we're just doing a strict comparison        
+        input_vect, weights = inputs
         squared_distance = tf.reduce_sum(
-            input_tensor=tf.pow(tf.subtract(tf.expand_dims(self._weights, axis=0),
+            input_tensor=tf.pow(tf.subtract(tf.expand_dims(weights, axis=0),
                                 tf.expand_dims(input_vect, axis=1)), 2), axis=2)
 
         # Get the index of the minimum distance for each input item, shape will be [batch_size],
@@ -199,53 +198,12 @@ class SelfOrganizingMap(tf.keras.layers.Layer):
                                                         axis=0) + float(1e-12), axis=-1)
 
             # With multi-gpu training we collect the results and do the weight assignment on the CPU
-            # Divide them
-            new_weights = tf.divide(numerator, denominator)
-            self._weights.assign(new_weights)
+            # Divide them            
+            weights = tf.divide(numerator, denominator)
+            #self._weights.assign(new_weights)
             
-            return bmu_locs, self._weights
+            return bmu_locs, weights
 
-    @property
-    def output_weights(self):
-        """ :return: The weights of the trained SOM as a NumPy array, or `None` if the SOM hasn't been trained """
-        return self._weights.numpy()
-
-
-    def pca_weights_init(self, dataset):
-        """ Initializes the weights of the map to span to the first two principal components.
-        Training a SOM with initial weights values based on their Principal Components makes the training process converge faster.
-        The data should be normalized prior to PCA initialization
-        """
-        if dataset.shape[1] == 1:
-            msg = 'At least 2 features are required for pca initialization'
-            raise ValueError(msg)
-
-        if self._m == 1 or self._n == 1:
-            msg = 'PCA requires the SOM map to have dimensions > 1 '
-            raise ValueError(msg)
-
-        # Calculate the covarience matrix for a dataset
-        tfcov = tfp.stats.covariance(dataset)
-        # Calculate the Eigen vectors and the Eigen values
-        eigen_values, eigen_vectors = tf.linalg.eigh(tfcov)
-        # Order them in ascending order
-        ev_order = tf.argsort(-eigen_values)
-
-        # Create evenly spaced values for the interval of -1 to 1
-        mspace = tf.Variable(tf.linspace(-1, 1, self._m), dtype=tf.float64)
-        nspace = tf.Variable(tf.linspace(-1, 1, self._n), dtype=tf.float64)
-
-        weights = list()
-        # Calculate the principal components by using the first two eigen vectors
-        for i in range(self._m):
-            for j in range(self._n):
-                weights.append(tf.add(tf.multiply(mspace[i], eigen_vectors[ev_order[0]]), tf.multiply(nspace[j], eigen_vectors[ev_order[1]])))
-       
-        weights_tensor = tf.convert_to_tensor(weights)
-        
-        weights_tensor = tf.cast(weights_tensor, tf.float32)
-        # Finally, assign the new weights
-        self._weights.assign(weights_tensor)
 
 if __name__ == "__main__":
     
