@@ -21,11 +21,11 @@
 # SOFTWARE.
 # =================================================================================
 import tensorflow as tf
-import tensorflow_transform as tft
 import tensorflow_probability as tfp
 import numpy as np
 from pathlib import Path
 import logging
+from tqdm import tqdm
 
 __author__ = "Chris Gorman"
 __email__ = "chris@cgorman.net"
@@ -369,15 +369,17 @@ class SelfOrganizingMap:
         summary_mod = int(0.1 * total_batches)
         global_step = step_offset
 
-        logging.info("Training self-organizing Map")
+        logging.info("Training self-organizing Map")        
         for epoch in range(self._max_epochs):
             logging.info("Epoch: {}/{}".format(epoch, self._max_epochs))
+            per = tqdm(total=batches_per_epoch)
             for batch in range(batches_per_epoch):
+                per.update(1)
                 current_batch = batch + (batches_per_epoch * epoch)
                 global_step = current_batch + step_offset
-                percent_complete = current_batch / total_batches
-                logging.debug("\tBatch {}/{} - {:.2%} complete".format(batch,
-                                                                       batches_per_epoch, percent_complete))
+                #percent_complete = current_batch / total_batches
+                #logging.debug("\tBatch {}/{} - {:.2%} complete".format(batch,
+                #                                                       batches_per_epoch, percent_complete))
                 # Only do summaries when a SummaryWriter has been provided
                 if writer:
                     if current_batch > 0 and current_batch % summary_mod == 0:
@@ -401,7 +403,7 @@ class SelfOrganizingMap:
                 else:
                     self._sess.run(self._training_op, feed_dict={
                                    self._epoch: epoch})
-
+            per.close()
         self._trained = True
         return global_step
 
