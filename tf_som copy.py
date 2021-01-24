@@ -21,6 +21,7 @@
 # SOFTWARE.
 # =================================================================================
 import tensorflow as tf
+import tensorflow_probability as tfp
 import numpy as np
 from pathlib import Path
 import logging
@@ -41,7 +42,7 @@ class SelfOrganizingMap:
 
     def __init__(self, m, n, dim, max_epochs=100, initial_radius=None, batch_size=128, initial_learning_rate=0.1,
                  graph=None, std_coeff=0.5, model_name='Self-Organizing-Map', softmax_activity=False, gpus=0,
-                 output_sensitivity=-1.0, session=None, checkpoint_dir=None, restore_path=None):
+                 output_sensitivity=-1.0, input_tensor=None, session=None, checkpoint_dir=None, restore_path=None):
         """
         Initialize a self-organizing map on the tensorflow graph
         :param m: Number of rows of neurons
@@ -110,6 +111,34 @@ class SelfOrganizingMap:
         self._initial_learning_rate = initial_learning_rate
         # Create the ops and put them on the graph
         self._initialize_tf_graph()
+        # If we want to reload from a save this will do that
+        self._maybe_reload_from_checkpoint()
+
+    def _save_checkpoint(self, global_step):
+        """ Save a checkpoint file
+        :param global_step: The current step of the network.
+        """
+        if self._saver is None:
+            # Create the saver object
+            self._saver = tf.compat.v1.train.Saver()
+        if self._checkpoint_dir is not None:
+            output_name = Path(self._checkpoint_dir) / self._model_name
+            self._saver.save(self._sess, output_name, global_step=global_step)
+
+    def _maybe_reload_from_checkpoint(self):
+        """ If the program was called with a checkpoint argument, load the variables from that.
+
+        We are assuming that if it's loaded then it's already trained.
+        """
+        if self._saver is None:
+            self._saver = tf.compat.v1.train.Saver()
+
+        if self._restore_path is not None:
+            logging.info("Restoring variables from checkpoint file {}".format(
+                self._restore_path))
+            self._saver.restore(self._sess, Path(self._restore_path))
+            self._trained = True
+            logging.info("Checkpoint loaded")
 
     def _neuron_locations(self):
         """ Maps an absolute neuron index to a 2d vector for calculating the neighborhood function """
@@ -127,10 +156,6 @@ class SelfOrganizingMap:
             # This list will contain the handles to the numerator and denominator tensors for each of the towers
             tower_updates = list()
             # This is used by all of the towers and needs to be fed to the graph, so let's put it here
-            
-            with tf.compat.v1.name_scope('Input'):
-                self._input = tf.compat.v1.placeholder("float", [], name="input")
-
             with tf.compat.v1.name_scope('Epoch'):
                 self._epoch = tf.compat.v1.placeholder("float", [], name="iter")
             if self._gpus > 0:
@@ -143,11 +168,17 @@ class SelfOrganizingMap:
                             tower_updates.append(self._tower_som())
                             tf.compat.v1.get_variable_scope().reuse_variables()
 
+                with tf.device('/gpu:{}'.format(self._gpus - 1)):
+                    # Put the activity op on the last GPU
+                    self._activity_op = self._make_activity_op(
+                        self._input_tensor)
             else:
                 # Running CPU only
                 with tf.compat.v1.name_scope("Tower_0") as scope:
                     tower_updates.append(self._tower_som())
                     tf.compat.v1.get_variable_scope().reuse_variables()
+                    self._activity_op = self._make_activity_op(
+                        self._input_tensor)
 
             with tf.compat.v1.name_scope("Weight_Update"):
                 # Get the outputs
@@ -192,6 +223,9 @@ class SelfOrganizingMap:
         # Maps an index to an (x,y) coordinate of a neuron in the map for calculating the neighborhood distance
         self._location_vects = tf.constant(np.array(
             list(self._neuron_locations())), name='Location_Vectors')
+
+        with tf.compat.v1.name_scope('Input'):
+            self._input = tf.identity(self._input_tensor)
 
         # Start by computing the best matching units / winning units for each input vector in the batch.
         # Basically calculates the Euclidean distance between every
@@ -283,15 +317,145 @@ class SelfOrganizingMap:
         # With multi-gpu training we collect the results and do the weight assignment on the CPU
         return numerator, denominator
 
+    def _make_activity_op(self, input_tensor):
+        """ Creates the op for calculating the activity of a SOM
+        :param input_tensor: A tensor to calculate the activity of. Must be of shape `[batch_size, dim]` where `dim` is
+        the dimensionality of the SOM's weights.
+        :return A handle to the newly created activity op:
+        """
+        with self._graph.as_default():
+            with tf.compat.v1.name_scope("Activity"):
+                # This constant controls the width of the gaussian.
+                # The closer to 0 it is, the wider it is.
+                c = tf.constant(self._c, dtype="float32")
+                # Get the euclidean distance between each neuron and the input vectors
+                dist = tf.norm(tensor=tf.subtract(
+                    tf.expand_dims(self._weights, axis=0),
+                    tf.expand_dims(input_tensor, axis=1)),
+                    name="Distance", axis=2)  # [batch_size, neurons]
 
-    def train_batch(self, batch, epoch):
+                # Calculate the Gaussian of the activity. Units with distances closer to 0 will have activities
+                # closer to 1.
+                activity = tf.exp(tf.multiply(
+                    tf.pow(dist, 2), c), name="Gaussian")
 
-        self._sess.run(self._training_op, feed_dict={
-                        self._input: batch
-                        self._epoch: epoch})
+                # Convert the activity into a softmax probability distribution
+                if self._softmax_activity:
+                    activity = tf.divide(tf.exp(activity),
+                                         tf.expand_dims(tf.reduce_sum(
+                                             input_tensor=tf.exp(activity), axis=1), axis=-1),
+                                         name="Softmax")
+
+                return tf.identity(activity, name="Output")
+
+    def get_activity_op(self):
+        return self._activity_op
+
+    def train(self, num_inputs, writer=None, step_offset=0):
+        """ Train the network on the data provided by the input tensor.
+        :param num_inputs: The total number of inputs in the data-set. Used to determine batches per epoch
+        :param writer: The summary writer to add summaries to. This is created by the caller so when we stack layers
+                        we don't end up with duplicate outputs. If `None` then no summaries will be written.
+        :param step_offset: The offset for the global step variable so I don't accidentally overwrite my summaries
+        """
+        # Divide by num_gpus to avoid accidentally training on the same data a bunch of times
+        if self._gpus > 0:
+            batches_per_epoch = num_inputs // self._batch_size // self._gpus
+        else:
+            batches_per_epoch = num_inputs // self._batch_size
+        total_batches = batches_per_epoch * self._max_epochs
+        # Get how many batches constitute roughly 10 percent of the total for recording summaries
+        summary_mod = int(0.1 * total_batches)
+        global_step = step_offset
+
+        logging.info("Training self-organizing Map")
+        for epoch in range(self._max_epochs):
+            logging.info("Epoch: {}/{}".format(epoch, self._max_epochs))
+            for batch in range(batches_per_epoch):
+                current_batch = batch + (batches_per_epoch * epoch)
+                global_step = current_batch + step_offset
+                percent_complete = current_batch / total_batches
+                logging.debug("\tBatch {}/{} - {:.2%} complete".format(batch,
+                                                                       batches_per_epoch, percent_complete))
+                # Only do summaries when a SummaryWriter has been provided
+                if writer:
+                    if current_batch > 0 and current_batch % summary_mod == 0:
+                        run_options = tf.compat.v1.RunOptions(
+                            trace_level=tf.compat.v1.RunOptions.FULL_TRACE)
+                        run_metadata = tf.compat.v1.RunMetadata()
+                        summary, _, _, = self._sess.run([self._merged, self._training_op,
+                                                         self._activity_op],
+                                                        feed_dict={
+                                                            self._epoch: epoch},
+                                                        options=run_options,
+                                                        run_metadata=run_metadata)
+                        writer.add_run_metadata(
+                            run_metadata, "step_{}".format(global_step))
+                        writer.add_summary(summary, global_step)
+                        self._save_checkpoint(global_step)
+                    else:
+                        summary, _ = self._sess.run([self._merged, self._training_op],
+                                                    feed_dict={self._epoch: epoch})
+                        writer.add_summary(summary, global_step)
+                else:
+                    self._sess.run(self._training_op, feed_dict={
+                                   self._epoch: epoch})
+
+        self._trained = True
+        return global_step
 
     @property
     def output_weights(self):
         """ :return: The weights of the trained SOM as a NumPy array, or `None` if the SOM hasn't been trained """
-        return np.array(self._sess.run(self._weights))
+        if self._trained:
+            return np.array(self._sess.run(self._weights))
+        else:
+            return None
 
+    def bmu_indices(self, dataset):
+        with tf.compat.v1.name_scope('BMU_Indices_Dataset'):
+            # This is the same code from _tower_som adapted to calculate all Best Matching Units for each item in the dataset
+            squared_distance = tf.reduce_sum(
+                input_tensor=tf.pow(tf.subtract(tf.expand_dims(self._weights, axis=0),
+                                   tf.expand_dims(dataset, axis=1)), 2), axis=2)
+
+            bmu_indices = tf.argmin(input=squared_distance, axis=1)
+            bmu_locs = tf.reshape(tf.gather(self._location_vects, bmu_indices), [-1, 2])
+            # The number of BMUs is the same as the number of items in the dataset
+            return np.array(self._sess.run(bmu_locs))
+
+    def pca_weights_init(self, dataset):
+        """ Initializes the weights of the map to span to the first two principal components.
+        Training a SOM with initial weights values based on their Principal Components makes the training process converge faster.
+        The data should be normalized prior to PCA initialization
+        """
+        if dataset.shape[1] == 1:
+            msg = 'At least 2 features are required for pca initialization'
+            raise ValueError(msg)
+
+        if self._m == 1 or self._n == 1:
+            msg = 'PCA requires the SOM map to have dimensions > 1 '
+            raise ValueError(msg)
+
+        # Calculate the covarience matrix for a dataset
+        tfcov = tfp.stats.covariance(dataset)
+        # Calculate the Eigen vectors and the Eigen values
+        eigen_values, eigen_vectors = tf.linalg.eigh(tfcov)
+        # Order them in ascending order
+        ev_order = tf.argsort(-eigen_values)
+
+        # Create evenly spaced values for the interval of -1 to 1
+        mspace = tf.Variable(tf.linspace(-1, 1, self._m), dtype=tf.float64)
+        nspace = tf.Variable(tf.linspace(-1, 1, self._n), dtype=tf.float64)
+
+        weights = list()
+        # Calculate the principal components by using the first two eigen vectors
+        for i in range(self._m):
+            for j in range(self._n):
+                weights.append(tf.add(tf.multiply(mspace[i], eigen_vectors[ev_order[0]]), tf.multiply(nspace[j], eigen_vectors[ev_order[1]])))
+       
+        weights_tensor = tf.convert_to_tensor(weights)
+        
+        weights_tensor = tf.cast(weights_tensor, tf.float32)
+        # Finally, assign the new weights
+        tf.compat.v1.assign(self._weights, weights_tensor)
