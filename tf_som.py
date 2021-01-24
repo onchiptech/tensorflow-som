@@ -79,7 +79,6 @@ class SelfOrganizingMap:
             output_sensitivity = -1
         # The activity equation is kind of long so I'm naming this c for brevity
         self._c = float(output_sensitivity)
-        self._sess = session
         self._checkpoint_dir = checkpoint_dir
         self._restore_path = restore_path
         self._gpus = int(abs(gpus))
