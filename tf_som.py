@@ -79,8 +79,6 @@ class SelfOrganizingMap:
             output_sensitivity = -1
         # The activity equation is kind of long so I'm naming this c for brevity
         self._c = float(output_sensitivity)
-        self._checkpoint_dir = checkpoint_dir
-        self._restore_path = restore_path
         self._gpus = int(abs(gpus))
         self._trained = False
 
@@ -98,7 +96,6 @@ class SelfOrganizingMap:
         self._activity_merged = None
         # This will be the collection of summaries for this subgraph. Add new summaries to it and pass it to merge()
         self._summary_list = list()
-        self._input_tensor = input_tensor
 
         if graph is None:
             self._graph = tf.Graph()
@@ -128,7 +125,7 @@ class SelfOrganizingMap:
             # This is used by all of the towers and needs to be fed to the graph, so let's put it here
             
             with tf.compat.v1.name_scope('Input'):
-                self._input = tf.compat.v1.placeholder("float", [], name="input")
+                self._input = tf.compat.v1.placeholder("float", shape=(None, self._dim), name="input")
 
             with tf.compat.v1.name_scope('Epoch'):
                 self._epoch = tf.compat.v1.placeholder("float", [], name="iter")
