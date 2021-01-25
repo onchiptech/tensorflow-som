@@ -8,7 +8,7 @@ class SOM(tf.keras.layers.Layer):
         
         super(SOM, self).__init__(name=name)
         # Assign required variables first
-        self.m = m; self.n = n
+        self.m = m; self.n = n; self.dim=dim
         if alpha is None:
             self.alpha = 0.3
         else:
