@@ -74,7 +74,9 @@ class SOM(tf.keras.layers.Layer):
         # W(t+1) = W(t) + W_delta
         new_weights = tf.math.add(weights, weightage_delta)
 
-        return bmu_loc, new_weights
+        return new_weights
+        
+
 
     def neuron_locations(self, m, n):
 
