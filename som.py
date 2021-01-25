@@ -60,7 +60,7 @@ class SOM(tf.keras.layers.Layer):
 
         # Finally, the op that will use learning_rate_op to update the weightage vectors of all neurons
         learning_rate_multiplier = pack(values=[tf.tile(tf.slice(
-            learning_rate_op, np.array([i]), np.array([1])), [dim]) for i in range(self.m * self.n)] )
+            learning_rate_op, np.array([i]), np.array([1])), [self.dim]) for i in range(self.m * self.n)] )
 
         ### Strucutre of updating weight ###
         ### W(t+1) = W(t) + W_delta ###
