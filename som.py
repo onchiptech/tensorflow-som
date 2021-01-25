@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.raw_ops import Pack as pack
+from matplotlib import pyplot as plt
 
 class SOM(tf.keras.layers.Layer):
 
@@ -108,39 +109,113 @@ class SOM(tf.keras.layers.Layer):
             for j in range(n):
                 yield np.array([i, j])
 
+
+    def get_centroids(self, weights):
+
+        centroid_grid = [[] for i in range(self.m)]
+        locations = list(self.neuron_locations(self.m, self.n))
+        for i, loc in enumerate(locations):
+            centroid_grid[loc[0]].append(weights[i])
+
+        return centroid_grid            
+
 if __name__ == "__main__":
     
 
-       
-        dim = 10
-        # This is more neurons than you need but it makes the visualization look nicer
-        m = 20
-        n = 20
-       
-        X = np.ones((1,dim)).astype(np.float32)
+    """      
+    dim = 10
+    # This is more neurons than you need but it makes the visualization look nicer
+    m = 20
+    n = 20
+    
+    X = np.ones((1,dim)).astype(np.float32)
 
-        # Build the SOM object and place all of its ops on the graph
-        som = SOM(m=m, n=n, dim=dim, num_epochs=20, name='SOM')
-        
-        @tf.function
-        def train_graph(x, weights, epoch):
-            inputs = (x, weights)
-            new_weights = som(inputs, training=True, epoch=epoch)
-            return new_weights
+    # Build the SOM object and place all of its ops on the graph
+    som = SOM(m=m, n=n, dim=dim, num_epochs=20, name='SOM')
+    
+    @tf.function
+    def train_graph(x, weights, epoch):
+        inputs = (x, weights)
+        new_weights = som(inputs, training=True, epoch=epoch)
+        return new_weights
 
-        @tf.function
-        def infer_graph(x, weights):
-            inputs = (x, weights)
-            loc = som(inputs, training=False)
-            return loc
+    @tf.function
+    def infer_graph(x, weights):
+        inputs = (x, weights)
+        loc = som(inputs, training=False)
+        return loc
 
-        print('Training...')
-        weigths = np.random.normal(size=m * n * dim).reshape((m * n, dim))
-        new_weights = train_graph(X, weigths, 0)        
-        print('new_weights: ', new_weights.shape)
-        print('new_weights: ', new_weights)
-        
-        print('Inference...')
-        loc = infer_graph(X, new_weights)
-        print('loc: ', loc.shape)
-        
+    print('Training...')
+    weigths = np.random.normal(size=m * n * dim).reshape((m * n, dim))
+    new_weights = train_graph(X, weigths, 0)        
+    print('new_weights: ', new_weights.shape)
+    print('new_weights: ', new_weights)
+    
+    print('Inference...')
+    loc = infer_graph(X, new_weights)
+    print('loc: ', loc.shape)
+    """
+                
+    #Training inputs for RGBcolors
+    colors = np.array(
+        [[0., 0., 0.],
+          [0., 0., 1.],
+          [0., 0., 0.5],
+          [0.125, 0.529, 1.0],
+          [0.33, 0.4, 0.67],
+          [0.6, 0.5, 1.0],
+          [0., 1., 0.],
+          [1., 0., 0.],
+          [0., 1., 1.],
+          [1., 0., 1.],
+          [1., 1., 0.],
+          [1., 1., 1.],
+          [.33, .33, .33],
+          [.5, .5, .5],
+          [.66, .66, .66]])
+    color_names = \
+        ['black', 'blue', 'darkblue', 'skyblue',
+        'greyblue', 'lilac', 'green', 'red',
+        'cyan', 'violet', 'yellow', 'white',
+        'darkgrey', 'mediumgrey', 'lightgrey']
+    
+    #Train a 20x30 SOM with 400 iterations
+    m = 20
+    n = 30
+    dim = 3
+    num_epochs = 400
+    som = SOM(m=m, n=n, dim=dim, num_epochs=num_epochs, name='SOM')
+    @tf.function
+    def train_graph(x, weights, epoch):
+        inputs = (x, weights)
+        new_weights = som(inputs, training=True, epoch=epoch)
+        return new_weights
+
+    @tf.function
+    def infer_graph(x, weights):
+        inputs = (x, weights)
+        loc = som(inputs, training=False)
+        return loc    
+    print('Training...')
+    num_inputs = len(colors)
+    weights = np.random.normal(size=m * n * dim).reshape((m * n, dim))
+    _colors = tf.convert_to_tensor(colors)
+    weights = tf.convert_to_tensor(weights)
+    for epoch in range(num_epochs):      
+      #for i in range(num_inputs):
+      #  weights = train_graph(_colors[i:i+1], weights, epoch).numpy()
+      weights = train_graph(_colors, weights, tf.convert_to_tensor(epoch))
+    weights = weights.numpy()
+    #Get output grid
+    image_grid = som.get_centroids(weights)
+    print('Inference...')
+    #Map colours to their closest neurons
+    mapped = infer_graph(colors, weights).numpy().tolist()
+    
+    #Plot
+    plt.imshow(image_grid)
+    plt.title('Color SOM')
+    for i, m in enumerate(mapped):
+        plt.text(m[1], m[0], color_names[i], ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.5, lw=0))
+    plt.show()
