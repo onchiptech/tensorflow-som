@@ -28,7 +28,7 @@ class SOM(tf.keras.layers.Layer):
             
         input_vector, weights = inputs
 
-        input_vector = pack(values=[input_vector for _ in range(m * n)])
+        input_vector = pack(values=[input_vector for _ in range(self.m * self.n)])
         # Training Operation  # tf.pack result will be [ (m*n),  dim ]
         diff = tf.math.subtract(weights, input_vector)
         distance = tf.math.sqrt(tf.reduce_sum(tf.math.pow(diff, 2), axis=1))
@@ -50,7 +50,7 @@ class SOM(tf.keras.layers.Layer):
         sigma_op = tf.math.multiply(self.sigma, learning_rate_op)
 
         # learning rates for all neurons, based on iteration number and location w.r.t. BMU.
-        diff = tf.math.subtract(self.location_vects, pack( values=[bmu_loc for _ in range(m * n)] ) )
+        diff = tf.math.subtract(self.location_vects, pack( values=[bmu_loc for _ in range(self.m * self.n)] ) )
         bmu_distance_squares = tf.reduce_sum(tf.math.pow(diff, 2), axis=1)
 
         neighbourhood_func = tf.math.exp(tf.math.negative(tf.math.divide(tf.cast(
@@ -60,7 +60,7 @@ class SOM(tf.keras.layers.Layer):
 
         # Finally, the op that will use learning_rate_op to update the weightage vectors of all neurons
         learning_rate_multiplier = pack(values=[tf.tile(tf.slice(
-            learning_rate_op, np.array([i]), np.array([1])), [dim]) for i in range(m * n)] )
+            learning_rate_op, np.array([i]), np.array([1])), [dim]) for i in range(self.m * self.n)] )
 
         ### Strucutre of updating weight ###
         ### W(t+1) = W(t) + W_delta ###
